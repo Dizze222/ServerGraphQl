@@ -1,135 +1,135 @@
-from datetime import datetime
-import os
 from flask import Flask
-from flask_sqlalchemy import SQLAlchemy
-from ariadne import load_schema_from_path, make_executable_schema, \
-    graphql_sync, snake_case_fallback_resolvers, ObjectType
-from ariadne.constants import PLAYGROUND_HTML
-from flask import request, jsonify
-from ariadne import convert_kwargs_to_snake_case
+import graphene
+from graphene_sqlalchemy import SQLAlchemyObjectType, SQLAlchemyConnectionField
+from flask_graphql import GraphQLView
+import json
+from flask_graphql_auth import (
+    AuthInfoField,
+    GraphQLAuth,
+    get_jwt_identity,
+    create_access_token,
+    create_refresh_token,
+    query_header_jwt_required,
+    mutation_jwt_refresh_token_required,
+    mutation_jwt_required
+)
+from sqlalchemy import *
+from sqlalchemy.orm import (scoped_session, sessionmaker, relationship, backref)
+from sqlalchemy.ext.declarative import declarative_base
 
-
-query = ObjectType("Query")
-
+engine = create_engine('sqlite:///data.db')
+db_session = scoped_session(sessionmaker(autocommit=False,
+                                         autoflush=False,
+                                         bind=engine))
+Base = declarative_base()
+Base.query = db_session.query_property()
 
 app = Flask(__name__)
-app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{os.getcwd()}/todo.db"
-app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
-db = SQLAlchemy(app)
+app.config['SECRET_KEY'] = 'ashish'
+app.config["JWT_SECRET_KEY"] = "Ashish"
+auth = GraphQLAuth(app)
 
 
-class Todo(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    description = db.Column(db.String)
-    completed = db.Column(db.Boolean, default=False)
-    due_date = db.Column(db.Date)
-
-    def __repr__(self):
-        return '<Article %r' % self.id
-
-    def to_dict(self):
-        return {
-            "id": self.id,
-            "completed": self.completed,
-            "description": self.description,
-            "due_date": str(self.due_date.strftime('%d-%m-%Y'))
-        }
-
-@convert_kwargs_to_snake_case
-def resolve_todo(obj, info, todo_id):
-    try:
-        todo = Todo.query.get(todo_id)
-        payload = {
-            "success": True,
-            "todo": todo.to_dict()
-        }
-
-    except AttributeError:  # todo not found
-        payload = {
-            "success": False,
-            "errors": [f"Todo item matching id {todo_id} not found"]
-        }
-
-    return payload
+class User(Base):
+    __tablename__ = 'users'
+    id = Column(Integer, primary_key=True)
+    username = Column(String(20), unique=True, nullable=False)
+    password = Column(String(60), nullable=False)
+    email = Column(String(100))
+    stores = relationship('Store', backref='owner')
 
 
-@app.route('/')
-def hello():
-    todoo = Todo.query.order_by(Todo.due_date).all()
-    count = 0
-    if count != 1:
-        print("dot")
-        today = datetime.today().date()
-        todo = Todo(description="Run a marathon", due_date=today, completed=False)
-        todo.to_dict()
-        db.session.add(todo)
-        db.session.commit()
-        count += 1
-        for i in todoo:
-            print(i.description)
-    return 'Hello!'
-
-def resolve_todos(obj, info):
-    try:
-        todos = [todo.to_dict() for todo in Todo.query.all()]
-        payload = {
-            "success": True,
-            "todos": todos
-        }
-    except Exception as error:
-        payload = {
-            "success": False,
-            "errors": [str(error)]
-        }
-    return payload
-
-@convert_kwargs_to_snake_case
-def resolve_todo(obj, info, todo_id):
-    try:
-        todo = Todo.query.get(todo_id)
-        payload = {
-            "success": True,
-            "todo": todo.to_dict()
-        }
-
-    except AttributeError:
-        payload = {
-            "success": False,
-            "errors": [f"Todo item matching id {todo_id} not found"]
-        }
-
-    return payload
+class Store(Base):
+    __tablename__ = 'stores'
+    id = Column(Integer, primary_key=True)
+    name = Column(String(20), unique=True, nullable=False)
+    user_id = Column(Integer, ForeignKey('users.id'))
 
 
-query.set_field("todos", resolve_todos)
-query.set_field("todos", resolve_todo)
+Base.metadata.create_all(engine)
 
-type_defs = load_schema_from_path("schema.graphql")
-schema = make_executable_schema(
-    type_defs, query, snake_case_fallback_resolvers
+
+class UserObject(SQLAlchemyObjectType):
+    class Meta:
+        model = User
+        interfaces = (graphene.relay.Node,)
+
+
+class StoreObject(SQLAlchemyObjectType):
+    class Meta:
+        model = Store
+        interfaces = (graphene.relay.Node,)
+
+
+class CreateUser(graphene.Mutation):
+    user = graphene.Field(UserObject)
+
+    class Arguments:
+        username = graphene.String(required=True)
+        password = graphene.String(required=True)
+        email = graphene.String(required=True)
+
+    def mutate(self, info, username, password, email):
+        user = User.query.filter_by(username=username).first()
+        if user:
+            return CreateUser(user=user)
+        user = User(username=username, password=password, email=email)
+        if user:
+            db_session.add(user)
+            db_session.commit()
+        return CreateUser(user=user)
+
+
+class AuthMutation(graphene.Mutation):
+    access_token = graphene.String()
+    refresh_token = graphene.String()
+
+    class Arguments:
+        username = graphene.String()
+        password = graphene.String()
+
+    def mutate(self, info, username, password):
+        user = User.query.filter_by(username=username, password=password).first()
+        print(user)
+        if not user:
+            raise Exception('Authenication Failure : User is not registered')
+        return AuthMutation(
+            access_token=create_access_token(username),
+            refresh_token=create_refresh_token(username)
+        )
+
+
+class Mutation(graphene.ObjectType):
+    create_user = CreateUser.Field()
+    auth = AuthMutation.Field()
+
+
+class Query(graphene.ObjectType):
+    node = graphene.relay.Node.Field()
+    all_users = SQLAlchemyConnectionField(UserObject)
+
+
+schema = graphene.Schema(query=Query, mutation=Mutation)
+
+app.add_url_rule(
+    '/graphql',
+    view_func=GraphQLView.as_view(
+        'graphql',
+        schema=schema,
+        graphiql=True
+    )
 )
 
 
-@app.route("/graphql", methods=["GET"])
-def graphql_playground():
-    return PLAYGROUND_HTML, 200
+@app.route('/')
+def home():
+    return 'home'
 
 
-@app.route("/graphql", methods=["POST"])
-def graphql_server():
-    data = request.get_json()
-    success, result = graphql_sync(
-        schema,
-        data,
-        context_value=request,
-        debug=app.debug
-    )
+@app.teardown_appcontext
+def shutdown_session(exception=None):
+    db_session.remove()
 
-    status_code = 200 if success else 400
-    return jsonify(result), status_code
-
-
-query.set_field("todo", resolve_todo)
 
 if __name__ == '__main__':
-    app.run()
+    app.run(debug=True)
