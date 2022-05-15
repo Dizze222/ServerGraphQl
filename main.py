@@ -61,6 +61,28 @@ class StoreObject(SQLAlchemyObjectType):
         interfaces = (graphene.relay.Node,)
 
 
+class ProtectedStore(graphene.Union):
+    class Meta:
+        types = (StoreObject, AuthInfoField)
+
+
+class CreateStore(graphene.Mutation):
+    store = graphene.Field(ProtectedStore)
+
+    class Arguments:
+        name = graphene.String(required=True)
+        user_id = graphene.Int(required=True)
+        token = graphene.String()
+
+    @mutation_jwt_required
+    def mutate(self, info, name, user_id):
+        store = Store(name=name, user_id=user_id)
+        if store:
+            db_session.add(store)
+            db_session.commit()
+        return CreateStore(store=store)
+
+
 class CreateUser(graphene.Mutation):
     user = graphene.Field(UserObject)
 
@@ -98,15 +120,38 @@ class AuthMutation(graphene.Mutation):
             refresh_token=create_refresh_token(username)
         )
 
+class RefreshMutation(graphene.Mutation):
+    class Arguments(object):
+        refresh_token = graphene.String()
+
+    new_token = graphene.String()
+
+    @mutation_jwt_refresh_token_required
+    def mutate(self):
+        current_user = get_jwt_identity()
+        return RefreshMutation(new_token=create_access_token(identity=current_user))
+
 
 class Mutation(graphene.ObjectType):
-    create_user = CreateUser.Field()
     auth = AuthMutation.Field()
+    create_user = CreateUser.Field()
+    protected_create_store = CreateStore.Field()
+    refresh = RefreshMutation.Field()
 
 
 class Query(graphene.ObjectType):
     node = graphene.relay.Node.Field()
+
     all_users = SQLAlchemyConnectionField(UserObject)
+    all_stores = SQLAlchemyConnectionField(StoreObject)
+    get_store = graphene.Field(type=ProtectedStore, token=graphene.String(), id=graphene.Int())
+
+    @query_header_jwt_required
+    def resolve_get_store(self, info, id):
+        store_qry = StoreObject.get_query(info)
+        storeval = store_qry.filter(Store.id.contains(id)).first()
+        return storeval
+
 
 
 schema = graphene.Schema(query=Query, mutation=Mutation)
