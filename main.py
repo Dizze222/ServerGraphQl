@@ -25,8 +25,8 @@ Base = declarative_base()
 Base.query = db_session.query_property()
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'ashish'
-app.config["JWT_SECRET_KEY"] = "Ashish"
+app.config['SECRET_KEY'] = 'gtrhyjtuirbjvfklsajncwfghjkvf738923wdjkgh'
+app.config["JWT_SECRET_KEY"] = "rkenjg9wsi0w987t6wjxnkschbvfueiwdjsqxihuef847"
 auth = GraphQLAuth(app)
 
 
@@ -120,6 +120,7 @@ class AuthMutation(graphene.Mutation):
             refresh_token=create_refresh_token(username)
         )
 
+
 class RefreshMutation(graphene.Mutation):
     class Arguments(object):
         refresh_token = graphene.String()
@@ -153,7 +154,6 @@ class Query(graphene.ObjectType):
         return storeval
 
 
-
 schema = graphene.Schema(query=Query, mutation=Mutation)
 
 app.add_url_rule(
@@ -168,7 +168,7 @@ app.add_url_rule(
 
 @app.route('/')
 def home():
-    return 'home'
+    return 'go to /graphql'
 
 
 @app.teardown_appcontext
@@ -178,3 +178,15 @@ def shutdown_session(exception=None):
 
 if __name__ == '__main__':
     app.run(debug=True)
+
+##query{
+##  allUsers{
+##  edges{
+##    node{
+##      id
+##     password
+##     username
+##   }
+## }
+##}
+##}
